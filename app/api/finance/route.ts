@@ -10,7 +10,7 @@ export async function GET() {
     const [categoryRows, subcategoryRows, incomeRows, expenseRows, goalRows] = await Promise.all([
       db.select().from(categories), db.select().from(subcategories),
       db.select({ id: incomes.id, description: incomes.description, amount: incomes.amount, date: incomes.date, person: people.name }).from(incomes).innerJoin(people, eq(incomes.personId, people.id)),
-      db.select({ id: expenses.id, description: expenses.description, amount: expenses.amount, date: expenses.date, categoryId: expenses.categoryId, subcategory: subcategories.name }).from(expenses).innerJoin(subcategories, eq(expenses.subcategoryId, subcategories.id)),
+      db.select({ id: expenses.id, description: expenses.description, amount: expenses.amount, date: expenses.date, categoryId: expenses.categoryId, subcategory: subcategories.name }).from(expenses).leftJoin(subcategories, eq(expenses.subcategoryId, subcategories.id)),
       db.select().from(monthlyGoals).where(and(gte(monthlyGoals.month, "2026-10-01"), lt(monthlyGoals.month, "2026-11-01"))),
     ]);
     return NextResponse.json({ configured: true, categories: categoryRows.map((category) => ({ ...category, subcategories: subcategoryRows.filter((item) => item.categoryId === category.id).map((item) => item.name) })), incomes: incomeRows.map((item) => ({ ...item, amount: Number(item.amount) })), expenses: expenseRows.map((item) => ({ ...item, amount: Number(item.amount) })), goal: goalRows[0] ? Number(goalRows[0].amount) : 10000 });
@@ -30,16 +30,18 @@ export async function POST(request: Request) {
       return NextResponse.json(created, { status: 201 });
     }
     if (body.type === "expense") {
-      const sub = await db.select().from(subcategories).where(and(eq(subcategories.categoryId, String(body.categoryId)), eq(subcategories.name, String(body.subcategory)))).limit(1);
-      if (!sub[0]) return NextResponse.json({ error: "Subcategoria inválida" }, { status: 400 });
-      const [created] = await db.insert(expenses).values({ description: String(body.description), categoryId: String(body.categoryId), subcategoryId: sub[0].id, amount: String(body.amount), date: String(body.date) }).returning();
+      const category = await db.select().from(categories).where(eq(categories.id, String(body.categoryId))).limit(1);
+      if (!category[0]) return NextResponse.json({ error: "Categoria inválida" }, { status: 400 });
+      const sub = category[0].kind === "fixed" ? await db.select().from(subcategories).where(and(eq(subcategories.categoryId, category[0].id), eq(subcategories.name, String(body.subcategory)))).limit(1) : [];
+      if (category[0].kind === "fixed" && !sub[0]) return NextResponse.json({ error: "Subcategoria fixa inválida" }, { status: 400 });
+      const [created] = await db.insert(expenses).values({ description: String(body.description), categoryId: category[0].id, subcategoryId: sub[0]?.id ?? null, amount: String(body.amount), date: String(body.date) }).returning();
       return NextResponse.json(created, { status: 201 });
     }
-    if (body.type === "category") {
-      const [category] = await db.insert(categories).values({ name: String(body.name), kind: body.kind === "fixed" ? "fixed" : "variable", color: String(body.color) }).returning();
-      const names = Array.isArray(body.subcategories) ? body.subcategories.map(String) : [];
-      if (names.length) await db.insert(subcategories).values(names.map((name) => ({ categoryId: category.id, name })));
-      return NextResponse.json(category, { status: 201 });
+    if (body.type === "subcategory") {
+      const category = await db.select().from(categories).where(and(eq(categories.id, String(body.categoryId)), eq(categories.kind, "fixed"))).limit(1);
+      if (!category[0]) return NextResponse.json({ error: "A categoria fixa não foi encontrada" }, { status: 400 });
+      const [created] = await db.insert(subcategories).values({ categoryId: category[0].id, name: String(body.name) }).returning();
+      return NextResponse.json(created, { status: 201 });
     }
     if (body.type === "goal") {
       const existing = await db.select().from(monthlyGoals).where(eq(monthlyGoals.month, "2026-10-01")).limit(1);
