@@ -15,6 +15,13 @@
       "when": 1790895652179,
       "tag": "0001_secret_reptil",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790897520472,
+      "tag": "0002_large_wind_dancer",
+      "breakpoints": true
     }
   ]
 }
