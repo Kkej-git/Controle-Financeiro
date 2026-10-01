@@ -1,0 +1,9 @@
+import { date, numeric, pgEnum, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+
+export const categoryKind = pgEnum("category_kind", ["fixed", "variable"]);
+export const categories = pgTable("categories", { id: uuid("id").defaultRandom().primaryKey(), name: text("name").notNull(), kind: categoryKind("kind").notNull(), color: text("color").notNull(), createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull() });
+export const subcategories = pgTable("subcategories", { id: uuid("id").defaultRandom().primaryKey(), categoryId: uuid("category_id").references(() => categories.id, { onDelete: "cascade" }).notNull(), name: text("name").notNull() });
+export const people = pgTable("people", { id: uuid("id").defaultRandom().primaryKey(), name: text("name").notNull().unique() });
+export const incomes = pgTable("incomes", { id: uuid("id").defaultRandom().primaryKey(), description: text("description").notNull(), personId: uuid("person_id").references(() => people.id).notNull(), amount: numeric("amount", { precision: 14, scale: 2 }).notNull(), date: date("date").notNull(), createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull() });
+export const expenses = pgTable("expenses", { id: uuid("id").defaultRandom().primaryKey(), description: text("description").notNull(), categoryId: uuid("category_id").references(() => categories.id).notNull(), subcategoryId: uuid("subcategory_id").references(() => subcategories.id).notNull(), amount: numeric("amount", { precision: 14, scale: 2 }).notNull(), date: date("date").notNull(), createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull() });
+export const monthlyGoals = pgTable("monthly_goals", { id: uuid("id").defaultRandom().primaryKey(), month: date("month").notNull().unique(), amount: numeric("amount", { precision: 14, scale: 2 }).notNull(), updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull() });
