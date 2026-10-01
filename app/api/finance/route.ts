@@ -32,14 +32,14 @@ export async function POST(request: Request) {
     if (body.type === "expense") {
       const category = await db.select().from(categories).where(eq(categories.id, String(body.categoryId))).limit(1);
       if (!category[0]) return NextResponse.json({ error: "Categoria inválida" }, { status: 400 });
-      const sub = category[0].kind === "fixed" ? await db.select().from(subcategories).where(and(eq(subcategories.categoryId, category[0].id), eq(subcategories.name, String(body.subcategory)))).limit(1) : [];
-      if (category[0].kind === "fixed" && !sub[0]) return NextResponse.json({ error: "Subcategoria fixa inválida" }, { status: 400 });
-      const [created] = await db.insert(expenses).values({ description: String(body.description), categoryId: category[0].id, subcategoryId: sub[0]?.id ?? null, amount: String(body.amount), date: String(body.date) }).returning();
+      const sub = await db.select().from(subcategories).where(and(eq(subcategories.categoryId, category[0].id), eq(subcategories.name, String(body.subcategory)))).limit(1);
+      if (!sub[0]) return NextResponse.json({ error: "Subcategoria inválida" }, { status: 400 });
+      const [created] = await db.insert(expenses).values({ description: String(body.description), categoryId: category[0].id, subcategoryId: sub[0].id, amount: String(body.amount), date: String(body.date) }).returning();
       return NextResponse.json(created, { status: 201 });
     }
     if (body.type === "subcategory") {
-      const category = await db.select().from(categories).where(and(eq(categories.id, String(body.categoryId)), eq(categories.kind, "fixed"))).limit(1);
-      if (!category[0]) return NextResponse.json({ error: "A categoria fixa não foi encontrada" }, { status: 400 });
+      const category = await db.select().from(categories).where(eq(categories.id, String(body.categoryId))).limit(1);
+      if (!category[0]) return NextResponse.json({ error: "Categoria não encontrada" }, { status: 400 });
       const [created] = await db.insert(subcategories).values({ categoryId: category[0].id, name: String(body.name) }).returning();
       return NextResponse.json(created, { status: 201 });
     }
