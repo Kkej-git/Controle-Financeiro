@@ -4,21 +4,35 @@ import { getDb } from "@/db";
 import { categories, expenses, incomes, monthlyGoals, people, subcategories } from "@/db/schema";
 
 export async function GET() {
-  if (!process.env.DATABASE_URL) return NextResponse.json({ configured: false });
+  if (!process.env.DATABASE_URL) return NextResponse.json({ configured: false, error: "A conexão com o PostgreSQL ainda não foi configurada." }, { status: 503 });
   try {
     const db = getDb();
-    const [categoryRows, subcategoryRows, peopleRows, incomeRows, expenseRows, goalRows] = await Promise.all([
-      db.select().from(categories), db.select().from(subcategories), db.select().from(people),
+    let categoryRows = await db.select().from(categories);
+    if (!categoryRows.length) {
+      categoryRows = await db.insert(categories).values([
+        { name: "Fixos", kind: "fixed", color: "#6d5dfb" },
+        { name: "Variáveis", kind: "variable", color: "#ff8a3d" },
+      ]).returning();
+      const fixed = categoryRows.find((item) => item.kind === "fixed");
+      const variable = categoryRows.find((item) => item.kind === "variable");
+      if (fixed && variable) await db.insert(subcategories).values([
+        { categoryId: fixed.id, name: "Casa" }, { categoryId: fixed.id, name: "Mercado" }, { categoryId: fixed.id, name: "Assinaturas" },
+        { categoryId: variable.id, name: "Transporte" }, { categoryId: variable.id, name: "Lazer" }, { categoryId: variable.id, name: "Outros" },
+      ]);
+    }
+    const { start, end } = currentMonthBounds();
+    const [subcategoryRows, peopleRows, incomeRows, expenseRows, goalRows] = await Promise.all([
+      db.select().from(subcategories), db.select().from(people),
       db.select({ id: incomes.id, description: incomes.description, amount: incomes.amount, date: incomes.date, createdAt: incomes.createdAt, person: people.name }).from(incomes).innerJoin(people, eq(incomes.personId, people.id)),
       db.select({ id: expenses.id, description: expenses.description, amount: expenses.amount, date: expenses.date, createdAt: expenses.createdAt, categoryId: expenses.categoryId, subcategory: subcategories.name }).from(expenses).leftJoin(subcategories, eq(expenses.subcategoryId, subcategories.id)),
-      db.select().from(monthlyGoals).where(and(gte(monthlyGoals.month, "2026-10-01"), lt(monthlyGoals.month, "2026-11-01"))),
+      db.select().from(monthlyGoals).where(and(gte(monthlyGoals.month, start), lt(monthlyGoals.month, end))),
     ]);
-    return NextResponse.json({ configured: true, categories: categoryRows.map((category) => ({ ...category, subcategories: subcategoryRows.filter((item) => item.categoryId === category.id && item.active).map((item) => item.name) })), people: peopleRows.filter((item) => item.active).map((item) => item.name), incomes: incomeRows.map((item) => ({ ...item, amount: Number(item.amount) })), expenses: expenseRows.map((item) => ({ ...item, amount: Number(item.amount) })), goal: goalRows[0] ? Number(goalRows[0].amount) : 10000 });
+    return NextResponse.json({ configured: true, categories: categoryRows.map((category) => ({ ...category, subcategories: subcategoryRows.filter((item) => item.categoryId === category.id && item.active).map((item) => item.name) })), people: peopleRows.filter((item) => item.active).map((item) => item.name), incomes: incomeRows.map((item) => ({ ...item, amount: Number(item.amount) })), expenses: expenseRows.map((item) => ({ ...item, amount: Number(item.amount) })), goal: goalRows[0] ? Number(goalRows[0].amount) : 0 });
   } catch (error) { console.error("Falha ao carregar dados financeiros", error); return NextResponse.json({ error: "Não foi possível acessar o banco de dados." }, { status: 500 }); }
 }
 
 export async function POST(request: Request) {
-  if (!process.env.DATABASE_URL) return NextResponse.json({ configured: false, storage: "device" });
+  if (!process.env.DATABASE_URL) return NextResponse.json({ configured: false, error: "A conexão com o PostgreSQL ainda não foi configurada." }, { status: 503 });
   try {
     const db = getDb();
     const body = await request.json() as Record<string, unknown>;
@@ -84,11 +98,22 @@ export async function POST(request: Request) {
       return NextResponse.json({ status: "removed" });
     }
     if (body.type === "goal") {
-      const existing = await db.select().from(monthlyGoals).where(eq(monthlyGoals.month, "2026-10-01")).limit(1);
+      const { start } = currentMonthBounds();
+      const existing = await db.select().from(monthlyGoals).where(eq(monthlyGoals.month, start)).limit(1);
       if (existing[0]) await db.update(monthlyGoals).set({ amount: String(body.amount), updatedAt: new Date() }).where(eq(monthlyGoals.id, existing[0].id));
-      else await db.insert(monthlyGoals).values({ month: "2026-10-01", amount: String(body.amount) });
+      else await db.insert(monthlyGoals).values({ month: start, amount: String(body.amount) });
       return NextResponse.json({ status: "saved" });
     }
     return NextResponse.json({ error: "Operação inválida" }, { status: 400 });
   } catch (error) { console.error("Falha ao salvar dado financeiro", error); return NextResponse.json({ error: "Não foi possível salvar no banco de dados." }, { status: 500 }); }
+}
+
+function currentMonthBounds() {
+  const now = new Date();
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth();
+  const start = `${year}-${String(month + 1).padStart(2, "0")}-01`;
+  const next = new Date(Date.UTC(year, month + 1, 1));
+  const end = `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}-01`;
+  return { start, end };
 }

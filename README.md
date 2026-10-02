@@ -11,7 +11,7 @@ npm run db:generate
 npm run dev
 ```
 
-Defina `DATABASE_URL` com uma conexão PostgreSQL para persistência compartilhada. Sem essa variável, a interface usa armazenamento persistente no navegador, mantendo as alterações no mesmo dispositivo após recarregar a página.
+Defina `DATABASE_URL` com uma conexão PostgreSQL para persistência compartilhada. O PostgreSQL é a única fonte de dados da aplicação; sem essa variável, a interface permanece vazia, bloqueia o salvamento e informa que o banco está indisponível.
 
 ## Banco de dados
 

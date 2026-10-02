@@ -3,7 +3,7 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import {
   ArrowDownLeft, ArrowUpRight, Check, CircleDollarSign, LayoutDashboard,
-  Menu, Moon, Pencil, Plus, ReceiptText, Settings2, Sun, Tags, Target,
+  Database, Menu, Moon, Pencil, Plus, ReceiptText, Settings2, Sun, Tags, Target,
   Trash2, UserRound, UsersRound, WalletCards, X,
 } from "lucide-react";
 import { useTheme } from "next-themes";
@@ -24,36 +24,21 @@ type Income = { id: string; description: string; person: string; amount: number;
 type Expense = { id: string; description: string; categoryId: string; subcategory: string | null; amount: number; date: string; createdAt?: string };
 type Category = { id: string; name: string; kind: CategoryKind; color: string; subcategories: string[] };
 
-const initialCategories: Category[] = [
-  { id: "fixed", name: "Fixos", kind: "fixed", color: "#6657d9", subcategories: ["Casa", "Mercado", "Assinaturas"] },
-  { id: "variable", name: "Variáveis", kind: "variable", color: "#ff8a3d", subcategories: ["Transporte", "Lazer", "Outros"] },
-];
-const initialPeople = ["Carlos", "Mariana"];
-const initialIncomes: Income[] = [
-  { id: "i1", description: "Salário", person: "Carlos", amount: 6200, date: "2026-10-01", createdAt: "2026-10-01T09:00:00.000Z" },
-  { id: "i2", description: "Freelance", person: "Mariana", amount: 1650, date: "2026-09-26", createdAt: "2026-09-26T14:00:00.000Z" },
-];
-const initialExpenses: Expense[] = [
-  { id: "e1", description: "Aluguel", categoryId: "fixed", subcategory: "Casa", amount: 1950, date: "2026-10-01", createdAt: "2026-10-01T08:00:00.000Z" },
-  { id: "e2", description: "Supermercado", categoryId: "fixed", subcategory: "Mercado", amount: 870, date: "2026-09-28", createdAt: "2026-09-28T12:00:00.000Z" },
-  { id: "e3", description: "Streaming", categoryId: "fixed", subcategory: "Assinaturas", amount: 320, date: "2026-09-25", createdAt: "2026-09-25T12:00:00.000Z" },
-  { id: "e4", description: "Combustível", categoryId: "variable", subcategory: "Transporte", amount: 460, date: "2026-09-22", createdAt: "2026-09-22T12:00:00.000Z" },
-  { id: "e5", description: "Cinema", categoryId: "variable", subcategory: "Lazer", amount: 180, date: "2026-09-20", createdAt: "2026-09-20T12:00:00.000Z" },
-];
 const money = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 const shortDate = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short" });
-const storageKey = "saldo-financeiro-v1";
+const todayIso = new Date().toLocaleDateString("en-CA");
 
 export default function FinanceApp() {
   const { resolvedTheme, setTheme } = useTheme();
   const [view, setView] = useState<View>("dashboard");
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [incomes, setIncomes] = useState(initialIncomes);
-  const [expenses, setExpenses] = useState(initialExpenses);
-  const [categories, setCategories] = useState(initialCategories);
-  const [people, setPeople] = useState(initialPeople);
-  const [goal, setGoal] = useState(10000);
-  const [storageReady, setStorageReady] = useState(false);
+  const [incomes, setIncomes] = useState<Income[]>([]);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [people, setPeople] = useState<string[]>([]);
+  const [goal, setGoal] = useState(0);
+  const [databaseLoading, setDatabaseLoading] = useState(true);
+  const [databaseError, setDatabaseError] = useState<string | null>(null);
   const [databaseEnabled, setDatabaseEnabled] = useState(false);
   const [dialog, setDialog] = useState<"income" | "expense" | "subcategory" | "person" | "goal" | null>(null);
   const [editing, setEditing] = useState<{ type: "income"; item: Income } | { type: "expense"; item: Expense } | null>(null);
@@ -62,7 +47,7 @@ export default function FinanceApp() {
   const totalIncome = incomes.reduce((sum, item) => sum + item.amount, 0);
   const totalExpense = expenses.reduce((sum, item) => sum + item.amount, 0);
   const balance = totalIncome - totalExpense;
-  const goalProgress = Math.min((totalIncome / goal) * 100, 100);
+  const goalProgress = goal > 0 ? Math.min((totalIncome / goal) * 100, 100) : 0;
 
   const groupChart = useMemo(() => (["fixed", "variable"] as CategoryKind[]).map((kind) => ({
     name: kind === "fixed" ? "Fixos" : "Variáveis",
@@ -88,76 +73,70 @@ export default function FinanceApp() {
 
   useEffect(() => {
     const controller = new AbortController();
-    const saved = localStorage.getItem(storageKey);
-    queueMicrotask(() => {
-      if (saved) {
-        try {
-          const data = JSON.parse(saved) as { categories?: Category[]; incomes?: Income[]; expenses?: Expense[]; people?: string[]; goal?: number };
-          if (data.categories) setCategories(data.categories);
-          if (data.incomes) setIncomes(data.incomes);
-          if (data.expenses) setExpenses(data.expenses);
-          if (data.people) setPeople(data.people);
-          if (data.goal) setGoal(data.goal);
-        } catch { localStorage.removeItem(storageKey); }
-      }
-      setStorageReady(true);
-    });
     fetch("/api/finance", { signal: controller.signal }).then(async (response) => {
-      if (!response.ok) return;
-      const data = await response.json() as { configured: boolean; categories: Category[]; incomes: Income[]; expenses: Expense[]; people: string[]; goal: number };
-      if (!data.configured) return;
+      const data = await response.json() as { configured?: boolean; categories?: Category[]; incomes?: Income[]; expenses?: Expense[]; people?: string[]; goal?: number; error?: string };
+      if (!response.ok || !data.configured) throw new Error(data.error || "Não foi possível conectar ao PostgreSQL.");
       setDatabaseEnabled(true);
-      setCategories(data.categories);
-      setIncomes(data.incomes);
-      setExpenses(data.expenses);
-      setPeople(data.people);
-      setGoal(data.goal);
-    }).catch(() => undefined);
+      setCategories(data.categories ?? []);
+      setIncomes(data.incomes ?? []);
+      setExpenses(data.expenses ?? []);
+      setPeople(data.people ?? []);
+      setGoal(data.goal ?? 0);
+      setDatabaseError(null);
+    }).catch((error: unknown) => {
+      if (controller.signal.aborted) return;
+      setDatabaseError(error instanceof Error ? error.message : "Não foi possível conectar ao PostgreSQL.");
+    }).finally(() => { if (!controller.signal.aborted) setDatabaseLoading(false); });
     return () => controller.abort();
   }, []);
 
-  useEffect(() => {
-    if (!storageReady) return;
-    localStorage.setItem(storageKey, JSON.stringify({ categories, incomes, expenses, people, goal }));
-  }, [storageReady, categories, incomes, expenses, people, goal]);
-
-  function persist(payload: Record<string, unknown>) {
-    if (!databaseEnabled) return;
-    void fetch("/api/finance", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }).then((response) => {
-      if (!response.ok) toast.error("O dado ficou na tela, mas não foi salvo no PostgreSQL.");
-    }).catch(() => toast.error("O dado ficou na tela, mas não foi salvo no PostgreSQL."));
+  async function persist(payload: Record<string, unknown>) {
+    if (!databaseEnabled) { toast.error("Conecte o PostgreSQL para salvar dados."); return false; }
+    try {
+      const response = await fetch("/api/finance", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error || "Não foi possível salvar no PostgreSQL.");
+      return true;
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Não foi possível salvar no PostgreSQL.");
+      return false;
+    }
   }
 
-  function addIncome(payload: Omit<Income, "id">) {
+  async function addIncome(payload: Omit<Income, "id">) {
     const item = { ...payload, id: crypto.randomUUID(), createdAt: new Date().toISOString() };
+    if (!await persist({ type: "income", ...item })) return false;
     setIncomes((current) => [item, ...current]);
-    persist({ type: "income", ...item });
     toast.success("Entrada adicionada");
+    return true;
   }
-  function addExpense(payload: Omit<Expense, "id">) {
+  async function addExpense(payload: Omit<Expense, "id">) {
     const item = { ...payload, id: crypto.randomUUID(), createdAt: new Date().toISOString() };
+    if (!await persist({ type: "expense", ...item })) return false;
     setExpenses((current) => [item, ...current]);
-    persist({ type: "expense", ...item });
     toast.success("Gasto adicionado");
+    return true;
   }
-  function updateIncome(payload: Omit<Income, "id">) {
-    if (!editing || editing.type !== "income") return;
+  async function updateIncome(payload: Omit<Income, "id">) {
+    if (!editing || editing.type !== "income") return false;
     const item = { ...editing.item, ...payload };
+    if (!await persist({ type: "incomeUpdate", ...item })) return false;
     setIncomes((current) => current.map((entry) => entry.id === item.id ? item : entry));
-    persist({ type: "incomeUpdate", ...item });
     toast.success("Entrada atualizada");
+    return true;
   }
-  function updateExpense(payload: Omit<Expense, "id">) {
-    if (!editing || editing.type !== "expense") return;
+  async function updateExpense(payload: Omit<Expense, "id">) {
+    if (!editing || editing.type !== "expense") return false;
     const item = { ...editing.item, ...payload };
+    if (!await persist({ type: "expenseUpdate", ...item })) return false;
     setExpenses((current) => current.map((entry) => entry.id === item.id ? item : entry));
-    persist({ type: "expenseUpdate", ...item });
     toast.success("Gasto atualizado");
+    return true;
   }
-  function removeTransaction(type: "income" | "expense", id: string) {
+  async function removeTransaction(type: "income" | "expense", id: string) {
+    if (!await persist({ type: type === "income" ? "incomeDelete" : "expenseDelete", id })) return;
     if (type === "income") setIncomes((current) => current.filter((item) => item.id !== id));
     else setExpenses((current) => current.filter((item) => item.id !== id));
-    persist({ type: type === "income" ? "incomeDelete" : "expenseDelete", id });
     toast.success(type === "income" ? "Entrada excluída" : "Gasto excluído");
   }
 
@@ -170,13 +149,13 @@ export default function FinanceApp() {
       name: "add_income", title: "Adicionar entrada", description: "Registra uma nova entrada e atualiza os totais visíveis.",
       inputSchema: { type: "object", properties: { description: { type: "string" }, person: { type: "string" }, amount: { type: "number", minimum: 0.01 }, date: { type: "string" } }, required: ["description", "person", "amount", "date"], additionalProperties: false },
       annotations: { readOnlyHint: false, untrustedContentHint: false },
-      execute: (input: Omit<Income, "id">) => { addIncome(input); return { status: "created", description: input.description, amount: input.amount }; },
+      execute: async (input: Omit<Income, "id">) => { if (!await addIncome(input)) throw new Error("Não foi possível salvar a entrada no PostgreSQL."); return { status: "created", description: input.description, amount: input.amount }; },
     });
     void register({
       name: "add_expense", title: "Adicionar gasto", description: "Registra um gasto em uma categoria e atualiza o dashboard.",
-      inputSchema: { type: "object", properties: { description: { type: "string" }, categoryId: { type: "string", enum: ["fixed", "variable"] }, subcategory: { type: "string" }, amount: { type: "number", minimum: 0.01 }, date: { type: "string" } }, required: ["description", "categoryId", "subcategory", "amount", "date"], additionalProperties: false },
+      inputSchema: { type: "object", properties: { description: { type: "string" }, categoryId: { type: "string" }, subcategory: { type: "string" }, amount: { type: "number", minimum: 0.01 }, date: { type: "string" } }, required: ["description", "categoryId", "subcategory", "amount", "date"], additionalProperties: false },
       annotations: { readOnlyHint: false, untrustedContentHint: false },
-      execute: (input: Omit<Expense, "id">) => { const category = categories.find((item) => item.id === input.categoryId); if (!category) throw new Error("Categoria inválida"); if (!input.subcategory || !category.subcategories.includes(input.subcategory)) throw new Error("Subcategoria inválida"); addExpense(input); return { status: "created", description: input.description, amount: input.amount }; },
+      execute: async (input: Omit<Expense, "id">) => { const category = categories.find((item) => item.id === input.categoryId); if (!category) throw new Error("Categoria inválida"); if (!input.subcategory || !category.subcategories.includes(input.subcategory)) throw new Error("Subcategoria inválida"); if (!await addExpense(input)) throw new Error("Não foi possível salvar o gasto no PostgreSQL."); return { status: "created", description: input.description, amount: input.amount }; },
     });
     return () => lifecycle.abort();
   // As ferramentas usam os mesmos estados e ações da interface.
@@ -216,19 +195,20 @@ export default function FinanceApp() {
         </header>
 
         <div className="mx-auto max-w-[1280px]">
+          {(databaseLoading || databaseError) && <div className={`mb-5 flex items-start gap-3 rounded-2xl border p-4 text-sm ${databaseError ? "border-[#f2c8cf] bg-[#fff5f6] text-[#9f3043]" : "border-[#dedbea] bg-white text-[#676a7c]"}`}><Database className="mt-0.5 size-5 shrink-0" /><div><p className="font-semibold">{databaseError ? "PostgreSQL indisponível" : "Carregando dados do PostgreSQL"}</p><p className="mt-1">{databaseError ?? "Aguarde enquanto os dados são carregados."}</p></div></div>}
           {view === "dashboard" && <Dashboard totalIncome={totalIncome} totalExpense={totalExpense} balance={balance} goal={goal} goalProgress={goalProgress} groupChart={groupChart} fixedSubcategoryChart={fixedSubcategoryChart} variableSubcategoryChart={variableSubcategoryChart} incomes={incomes} expenses={expenses} categories={categories} onEditGoal={() => setDialog("goal")} />}
           {view === "incomes" && <ListView type="income" title="Todas as entradas" description="Acompanhe quem depositou e quando o valor entrou." items={incomes} people={people} onAdd={() => { setEditing(null); setDialog("income"); }} onEdit={(item) => { setEditing({ type: "income", item: item as Income }); setDialog("income"); }} onRemove={(id) => removeTransaction("income", id)} />}
           {view === "expenses" && <ListView type="expense" title="Todos os gastos" description="Consulte os gastos por categoria e subcategoria." items={expenses} categories={categories} onAdd={() => { setEditing(null); setDialog("expense"); }} onEdit={(item) => { setEditing({ type: "expense", item: item as Expense }); setDialog("expense"); }} onRemove={(id) => removeTransaction("expense", id)} />}
-          {view === "categories" && <CategoriesView categories={categories} expenses={expenses} onAddSubcategory={(kind) => { setSubcategoryKind(kind); setDialog("subcategory"); }} onRemoveSubcategory={(categoryId, name) => { setCategories((current) => current.map((category) => category.id === categoryId ? { ...category, subcategories: category.subcategories.filter((item) => item !== name) } : category)); persist({ type: "subcategoryDeactivate", categoryId, name }); toast.success("Subcategoria removida"); }} />}
-          {view === "people" && <PeopleView people={people} onAdd={() => setDialog("person")} onRemove={(name) => { setPeople((current) => current.filter((person) => person !== name)); persist({ type: "personDeactivate", name }); toast.success("Pessoa removida da seleção"); }} />}
+          {view === "categories" && <CategoriesView categories={categories} expenses={expenses} onAddSubcategory={(kind) => { setSubcategoryKind(kind); setDialog("subcategory"); }} onRemoveSubcategory={async (categoryId, name) => { if (!await persist({ type: "subcategoryDeactivate", categoryId, name })) return; setCategories((current) => current.map((category) => category.id === categoryId ? { ...category, subcategories: category.subcategories.filter((item) => item !== name) } : category)); toast.success("Subcategoria removida"); }} />}
+          {view === "people" && <PeopleView people={people} onAdd={() => setDialog("person")} onRemove={async (name) => { if (!await persist({ type: "personDeactivate", name })) return; setPeople((current) => current.filter((person) => person !== name)); toast.success("Pessoa removida da seleção"); }} />}
         </div>
       </main>
 
-      <IncomeDialog key={`${people.join("|")}-${editing?.type === "income" ? editing.item.id : "new"}`} open={dialog === "income"} people={people} item={editing?.type === "income" ? editing.item : undefined} onOpenChange={(open) => { if (!open) { setDialog(null); setEditing(null); } }} onSave={(item) => { if (editing?.type === "income") updateIncome(item); else addIncome(item); setDialog(null); setEditing(null); }} />
-      <ExpenseDialog key={editing?.type === "expense" ? editing.item.id : "new-expense"} open={dialog === "expense"} categories={categories} item={editing?.type === "expense" ? editing.item : undefined} onOpenChange={(open) => { if (!open) { setDialog(null); setEditing(null); } }} onSave={(item) => { if (editing?.type === "expense") updateExpense(item); else addExpense(item); setDialog(null); setEditing(null); }} />
-      <SubcategoryDialog open={dialog === "subcategory"} kind={subcategoryKind} existing={categories.find((item) => item.kind === subcategoryKind)?.subcategories ?? []} onOpenChange={(open) => !open && setDialog(null)} onSave={(name) => { const targetCategory = categories.find((category) => category.kind === subcategoryKind); setCategories((current) => current.map((category) => category.kind === subcategoryKind ? { ...category, subcategories: [...category.subcategories, name] } : category)); persist({ type: "subcategory", categoryId: targetCategory?.id, name }); setDialog(null); toast.success("Subcategoria adicionada"); }} />
-      <PersonDialog open={dialog === "person"} existing={people} onOpenChange={(open) => !open && setDialog(null)} onSave={(name) => { setPeople((current) => [...current, name]); persist({ type: "person", name }); setDialog(null); toast.success("Pessoa adicionada"); }} />
-      <GoalDialog key={goal} open={dialog === "goal"} goal={goal} onOpenChange={(open) => !open && setDialog(null)} onSave={(value) => { setGoal(value); persist({ type: "goal", amount: value }); setDialog(null); toast.success("Meta mensal atualizada"); }} />
+      <IncomeDialog key={`${people.join("|")}-${editing?.type === "income" ? editing.item.id : "new"}`} open={dialog === "income"} people={people} item={editing?.type === "income" ? editing.item : undefined} onOpenChange={(open) => { if (!open) { setDialog(null); setEditing(null); } }} onSave={async (item) => { const saved = editing?.type === "income" ? await updateIncome(item) : await addIncome(item); if (saved) { setDialog(null); setEditing(null); } return saved; }} />
+      <ExpenseDialog key={editing?.type === "expense" ? editing.item.id : "new-expense"} open={dialog === "expense"} categories={categories} item={editing?.type === "expense" ? editing.item : undefined} onOpenChange={(open) => { if (!open) { setDialog(null); setEditing(null); } }} onSave={async (item) => { const saved = editing?.type === "expense" ? await updateExpense(item) : await addExpense(item); if (saved) { setDialog(null); setEditing(null); } return saved; }} />
+      <SubcategoryDialog open={dialog === "subcategory"} kind={subcategoryKind} existing={categories.find((item) => item.kind === subcategoryKind)?.subcategories ?? []} onOpenChange={(open) => !open && setDialog(null)} onSave={async (name) => { const targetCategory = categories.find((category) => category.kind === subcategoryKind); if (!targetCategory || !await persist({ type: "subcategory", categoryId: targetCategory.id, name })) return false; setCategories((current) => current.map((category) => category.kind === subcategoryKind ? { ...category, subcategories: [...category.subcategories, name] } : category)); setDialog(null); toast.success("Subcategoria adicionada"); return true; }} />
+      <PersonDialog open={dialog === "person"} existing={people} onOpenChange={(open) => !open && setDialog(null)} onSave={async (name) => { if (!await persist({ type: "person", name })) return false; setPeople((current) => [...current, name]); setDialog(null); toast.success("Pessoa adicionada"); return true; }} />
+      <GoalDialog key={goal} open={dialog === "goal"} goal={goal} onOpenChange={(open) => !open && setDialog(null)} onSave={async (value) => { if (!await persist({ type: "goal", amount: value })) return false; setGoal(value); setDialog(null); toast.success("Meta mensal atualizada"); return true; }} />
       <Toaster position="top-right" richColors />
     </div>
   );
@@ -238,8 +218,8 @@ type ChartItem = { name: string; value: number; color: string };
 function Dashboard({ totalIncome, totalExpense, balance, goal, goalProgress, groupChart, fixedSubcategoryChart, variableSubcategoryChart, incomes, expenses, categories, onEditGoal }: { totalIncome: number; totalExpense: number; balance: number; goal: number; goalProgress: number; groupChart: ChartItem[]; fixedSubcategoryChart: ChartItem[]; variableSubcategoryChart: ChartItem[]; incomes: Income[]; expenses: Expense[]; categories: Category[]; onEditGoal: () => void }) {
   const recent = [...incomes.map((item) => ({ ...item, type: "income" as const })), ...expenses.map((item) => ({ ...item, type: "expense" as const }))].sort(compareTransactions).slice(0, 4);
   return <div className="space-y-5">
-    <section className="grid gap-4 md:grid-cols-3"><SummaryCard title="Entradas" value={money.format(totalIncome)} hint={`${Math.round(goalProgress)}% da meta mensal`} icon={<ArrowDownLeft className="size-5" />} tone="green" /><SummaryCard title="Gastos" value={money.format(totalExpense)} hint={`${totalIncome ? Math.round(totalExpense / totalIncome * 100) : 0}% das entradas`} icon={<ArrowUpRight className="size-5" />} tone="red" /><SummaryCard title="Saldo restante" value={money.format(balance)} hint="Disponível no mês" icon={<WalletCards className="size-5" />} tone="purple" /></section>
-    <section className="rounded-2xl border border-[#e8e9f1] bg-white p-5 sm:p-6"><div className="mb-4 flex items-center justify-between gap-4"><div><div className="flex items-center gap-2"><p className="text-sm font-semibold">Meta mensal de entradas</p><button aria-label="Editar meta" onClick={onEditGoal} className="text-[#8e91a2] hover:text-[#6657d9]"><Pencil className="size-3.5" /></button></div><p className="mt-1 text-sm text-[#85889a]">{totalIncome >= goal ? "Meta alcançada. Ótimo trabalho!" : `Faltam ${money.format(goal - totalIncome)} para alcançar sua meta`}</p></div><p className="text-right text-sm text-[#85889a]"><strong className="block text-base text-[#252735]">{money.format(totalIncome)}</strong>de {money.format(goal)}</p></div><Progress value={goalProgress} className="h-3 bg-[#eeecfb] [&_[data-slot=progress-indicator]]:bg-[#6657d9]" /></section>
+    <section className="grid gap-4 md:grid-cols-3"><SummaryCard title="Entradas" value={money.format(totalIncome)} hint={goal > 0 ? `${Math.round(goalProgress)}% da meta mensal` : "Meta mensal não definida"} icon={<ArrowDownLeft className="size-5" />} tone="green" /><SummaryCard title="Gastos" value={money.format(totalExpense)} hint={`${totalIncome ? Math.round(totalExpense / totalIncome * 100) : 0}% das entradas`} icon={<ArrowUpRight className="size-5" />} tone="red" /><SummaryCard title="Saldo restante" value={money.format(balance)} hint="Disponível no mês" icon={<WalletCards className="size-5" />} tone="purple" /></section>
+    <section className="rounded-2xl border border-[#e8e9f1] bg-white p-5 sm:p-6"><div className="mb-4 flex items-center justify-between gap-4"><div><div className="flex items-center gap-2"><p className="text-sm font-semibold">Meta mensal de entradas</p><button aria-label="Editar meta" onClick={onEditGoal} className="text-[#8e91a2] hover:text-[#6657d9]"><Pencil className="size-3.5" /></button></div><p className="mt-1 text-sm text-[#85889a]">{goal <= 0 ? "Defina uma meta para acompanhar seu progresso." : totalIncome >= goal ? "Meta alcançada. Ótimo trabalho!" : `Faltam ${money.format(goal - totalIncome)} para alcançar sua meta`}</p></div><p className="text-right text-sm text-[#85889a]"><strong className="block text-base text-[#252735]">{money.format(totalIncome)}</strong>{goal > 0 ? <>de {money.format(goal)}</> : "Meta não definida"}</p></div><Progress value={goalProgress} className="h-3 bg-[#eeecfb] [&_[data-slot=progress-indicator]]:bg-[#6657d9]" /></section>
     <section className="grid gap-5 xl:grid-cols-[1.1fr_.9fr]">
       <div className="rounded-2xl border border-[#e8e9f1] bg-white p-5 sm:p-6"><div className="mb-4"><h2 className="font-semibold">Distribuição dos gastos</h2><p className="mt-1 text-sm text-[#85889a]">Categorias e suas subcategorias</p></div><Tabs defaultValue="group"><TabsList className="grid w-full grid-cols-3"><TabsTrigger value="group">Total</TabsTrigger><TabsTrigger value="fixed">Fixas</TabsTrigger><TabsTrigger value="variable">Variáveis</TabsTrigger></TabsList><TabsContent value="group"><ChartBlock data={groupChart} total={totalExpense} /></TabsContent><TabsContent value="fixed"><ChartBlock data={fixedSubcategoryChart} total={fixedSubcategoryChart.reduce((sum, item) => sum + item.value, 0)} empty="Ainda não há gastos fixos." /></TabsContent><TabsContent value="variable"><ChartBlock data={variableSubcategoryChart} total={variableSubcategoryChart.reduce((sum, item) => sum + item.value, 0)} empty="Ainda não há gastos variáveis." /></TabsContent></Tabs></div>
       <div className="rounded-2xl border border-[#e8e9f1] bg-white p-5 sm:p-6"><div className="mb-5 flex items-start justify-between"><div><h2 className="font-semibold">Movimentações recentes</h2><p className="mt-1 text-sm text-[#85889a]">Mais recentes primeiro</p></div><ReceiptText className="size-5 text-[#9b9eae]" /></div><div className="space-y-1">{recent.map((item) => { const isIncome = item.type === "income"; const category = !isIncome ? categories.find((cat) => cat.id === item.categoryId) : null; const expenseLabel = item.subcategory ? `${category?.name} • ${item.subcategory}` : category?.name; return <div key={`${item.type}-${item.id}`} className="flex items-center gap-3 border-b border-[#f0f0f4] py-3 last:border-0"><span className={`grid size-10 place-items-center rounded-xl ${isIncome ? "bg-[#eaf8f1] text-[#16845b]" : "bg-[#fff0f2] text-[#d24d64]"}`}>{isIncome ? <ArrowDownLeft className="size-[18px]" /> : <ArrowUpRight className="size-[18px]" />}</span><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{item.description}</p><p className="truncate text-xs text-[#9194a5]">{isIncome ? `Entrada por ${item.person}` : expenseLabel} • {formatDate(item.date)}</p></div><p className={`text-sm font-semibold ${isIncome ? "text-[#16845b]" : "text-[#d24d64]"}`}>{isIncome ? "+ " : "- "}{money.format(item.amount)}</p></div>; })}</div></div>
@@ -298,15 +278,15 @@ function ConfirmRemove({ label, description, onRemove, compact = false }: { labe
 
 function Field({ label, children }: { label: string; children: ReactNode }) { return <div className="grid gap-2"><Label>{label}</Label>{children}</div>; }
 
-function IncomeDialog({ open, people, item, onOpenChange, onSave }: { open: boolean; people: string[]; item?: Income; onOpenChange: (open: boolean) => void; onSave: (item: Omit<Income, "id">) => void }) { const [values, setValues] = useState({ description: item?.description ?? "", person: item?.person ?? people[0] ?? "", amount: item ? String(item.amount) : "", date: item?.date ?? "2026-10-01" }); function submit(event: FormEvent) { event.preventDefault(); const amount = Number(values.amount.replace(",", ".")); if (!values.description || !values.person || amount <= 0) return toast.error("Preencha todos os campos obrigatórios"); onSave({ ...values, amount, createdAt: item?.createdAt }); } return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><form onSubmit={submit}><DialogHeader><DialogTitle>{item ? "Editar entrada" : "Nova entrada"}</DialogTitle><DialogDescription>{item ? "Atualize os dados desta entrada." : "Registre o valor e selecione quem fez o depósito."}</DialogDescription></DialogHeader><div className="grid gap-4 py-5"><Field label="Descrição"><Input value={values.description} onChange={(e) => setValues({ ...values, description: e.target.value })} placeholder="Ex.: Salário" /></Field><Field label="Pessoa"><Select value={values.person} onValueChange={(person) => setValues({ ...values, person })}><SelectTrigger className="w-full"><SelectValue placeholder="Selecione uma pessoa" /></SelectTrigger><SelectContent>{!people.includes(values.person) && values.person && <SelectItem value={values.person}>{values.person} (removida)</SelectItem>}{people.map((person) => <SelectItem key={person} value={person}>{person}</SelectItem>)}</SelectContent></Select>{!people.length && !item && <p className="text-xs text-[#d24d64]">Adicione uma pessoa na seção Pessoas antes de registrar a entrada.</p>}</Field><div className="grid grid-cols-2 gap-4"><Field label="Valor"><Input inputMode="decimal" value={values.amount} onChange={(e) => setValues({ ...values, amount: e.target.value })} placeholder="0,00" /></Field><Field label="Data"><Input type="date" value={values.date} onChange={(e) => setValues({ ...values, date: e.target.value })} /></Field></div></div><DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button><Button disabled={!people.length && !item} className="bg-[#6657d9] hover:bg-[#5849c8]" type="submit"><Check /> {item ? "Salvar alterações" : "Salvar entrada"}</Button></DialogFooter></form></DialogContent></Dialog>; }
+function IncomeDialog({ open, people, item, onOpenChange, onSave }: { open: boolean; people: string[]; item?: Income; onOpenChange: (open: boolean) => void; onSave: (item: Omit<Income, "id">) => Promise<boolean> }) { const [values, setValues] = useState({ description: item?.description ?? "", person: item?.person ?? people[0] ?? "", amount: item ? String(item.amount) : "", date: item?.date ?? todayIso }); const [saving, setSaving] = useState(false); async function submit(event: FormEvent) { event.preventDefault(); const amount = Number(values.amount.replace(",", ".")); if (!values.description || !values.person || amount <= 0) return toast.error("Preencha todos os campos obrigatórios"); setSaving(true); await onSave({ ...values, amount, createdAt: item?.createdAt }); setSaving(false); } return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><form onSubmit={submit}><DialogHeader><DialogTitle>{item ? "Editar entrada" : "Nova entrada"}</DialogTitle><DialogDescription>{item ? "Atualize os dados desta entrada." : "Registre o valor e selecione quem fez o depósito."}</DialogDescription></DialogHeader><div className="grid gap-4 py-5"><Field label="Descrição"><Input value={values.description} onChange={(e) => setValues({ ...values, description: e.target.value })} placeholder="Ex.: Salário" /></Field><Field label="Pessoa"><Select value={values.person} onValueChange={(person) => setValues({ ...values, person })}><SelectTrigger className="w-full"><SelectValue placeholder="Selecione uma pessoa" /></SelectTrigger><SelectContent>{!people.includes(values.person) && values.person && <SelectItem value={values.person}>{values.person} (removida)</SelectItem>}{people.map((person) => <SelectItem key={person} value={person}>{person}</SelectItem>)}</SelectContent></Select>{!people.length && !item && <p className="text-xs text-[#d24d64]">Adicione uma pessoa na seção Pessoas antes de registrar a entrada.</p>}</Field><div className="grid grid-cols-2 gap-4"><Field label="Valor"><Input inputMode="decimal" value={values.amount} onChange={(e) => setValues({ ...values, amount: e.target.value })} placeholder="0,00" /></Field><Field label="Data"><Input type="date" value={values.date} onChange={(e) => setValues({ ...values, date: e.target.value })} /></Field></div></div><DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button><Button disabled={saving || (!people.length && !item)} className="bg-[#6657d9] hover:bg-[#5849c8]" type="submit"><Check /> {saving ? "Salvando..." : item ? "Salvar alterações" : "Salvar entrada"}</Button></DialogFooter></form></DialogContent></Dialog>; }
 
-function ExpenseDialog({ open, categories, item, onOpenChange, onSave }: { open: boolean; categories: Category[]; item?: Expense; onOpenChange: (open: boolean) => void; onSave: (item: Omit<Expense, "id">) => void }) { const first = categories[0]; const [values, setValues] = useState({ description: item?.description ?? "", categoryId: item?.categoryId ?? first?.id ?? "fixed", subcategory: item?.subcategory ?? first?.subcategories[0] ?? "", amount: item ? String(item.amount) : "", date: item?.date ?? "2026-10-01" }); const selected = categories.find((entry) => entry.id === values.categoryId); function submit(event: FormEvent) { event.preventDefault(); const amount = Number(values.amount.replace(",", ".")); if (!values.description || !values.categoryId || !values.subcategory || amount <= 0) return toast.error("Preencha todos os campos obrigatórios"); onSave({ ...values, amount, createdAt: item?.createdAt }); } return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><form onSubmit={submit}><DialogHeader><DialogTitle>{item ? "Editar gasto" : "Novo gasto"}</DialogTitle><DialogDescription>{item ? "Atualize os dados deste gasto." : "Escolha a categoria e a subcategoria do gasto."}</DialogDescription></DialogHeader><div className="grid gap-4 py-5"><Field label="Descrição"><Input value={values.description} onChange={(e) => setValues({ ...values, description: e.target.value })} placeholder="Ex.: Conta de energia" /></Field><div className="grid grid-cols-2 gap-4"><Field label="Categoria"><Select value={values.categoryId} onValueChange={(categoryId) => { const next = categories.find((entry) => entry.id === categoryId); setValues({ ...values, categoryId, subcategory: next?.subcategories[0] ?? "" }); }}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent>{categories.map((entry) => <SelectItem key={entry.id} value={entry.id}>{entry.name}</SelectItem>)}</SelectContent></Select></Field><Field label="Subcategoria"><Select value={values.subcategory ?? ""} onValueChange={(subcategory) => setValues({ ...values, subcategory })}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent>{values.subcategory && !selected?.subcategories.includes(values.subcategory) && <SelectItem value={values.subcategory}>{values.subcategory} (removida)</SelectItem>}{selected?.subcategories.map((entry) => <SelectItem key={entry} value={entry}>{entry}</SelectItem>)}</SelectContent></Select></Field></div><div className="grid grid-cols-2 gap-4"><Field label="Valor"><Input inputMode="decimal" value={values.amount} onChange={(e) => setValues({ ...values, amount: e.target.value })} placeholder="0,00" /></Field><Field label="Data"><Input type="date" value={values.date} onChange={(e) => setValues({ ...values, date: e.target.value })} /></Field></div></div><DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button><Button className="bg-[#6657d9] hover:bg-[#5849c8]" type="submit"><Check /> {item ? "Salvar alterações" : "Salvar gasto"}</Button></DialogFooter></form></DialogContent></Dialog>; }
+function ExpenseDialog({ open, categories, item, onOpenChange, onSave }: { open: boolean; categories: Category[]; item?: Expense; onOpenChange: (open: boolean) => void; onSave: (item: Omit<Expense, "id">) => Promise<boolean> }) { const first = categories[0]; const [values, setValues] = useState({ description: item?.description ?? "", categoryId: item?.categoryId ?? first?.id ?? "", subcategory: item?.subcategory ?? first?.subcategories[0] ?? "", amount: item ? String(item.amount) : "", date: item?.date ?? todayIso }); const [saving, setSaving] = useState(false); const selected = categories.find((entry) => entry.id === values.categoryId); async function submit(event: FormEvent) { event.preventDefault(); const amount = Number(values.amount.replace(",", ".")); if (!values.description || !values.categoryId || !values.subcategory || amount <= 0) return toast.error("Preencha todos os campos obrigatórios"); setSaving(true); await onSave({ ...values, amount, createdAt: item?.createdAt }); setSaving(false); } return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><form onSubmit={submit}><DialogHeader><DialogTitle>{item ? "Editar gasto" : "Novo gasto"}</DialogTitle><DialogDescription>{item ? "Atualize os dados deste gasto." : "Escolha a categoria e a subcategoria do gasto."}</DialogDescription></DialogHeader><div className="grid gap-4 py-5"><Field label="Descrição"><Input value={values.description} onChange={(e) => setValues({ ...values, description: e.target.value })} placeholder="Ex.: Conta de energia" /></Field><div className="grid grid-cols-2 gap-4"><Field label="Categoria"><Select value={values.categoryId} onValueChange={(categoryId) => { const next = categories.find((entry) => entry.id === categoryId); setValues({ ...values, categoryId, subcategory: next?.subcategories[0] ?? "" }); }}><SelectTrigger className="w-full"><SelectValue placeholder="Selecione" /></SelectTrigger><SelectContent>{categories.map((entry) => <SelectItem key={entry.id} value={entry.id}>{entry.name}</SelectItem>)}</SelectContent></Select></Field><Field label="Subcategoria"><Select value={values.subcategory ?? ""} onValueChange={(subcategory) => setValues({ ...values, subcategory })}><SelectTrigger className="w-full"><SelectValue placeholder="Selecione" /></SelectTrigger><SelectContent>{values.subcategory && !selected?.subcategories.includes(values.subcategory) && <SelectItem value={values.subcategory}>{values.subcategory} (removida)</SelectItem>}{selected?.subcategories.map((entry) => <SelectItem key={entry} value={entry}>{entry}</SelectItem>)}</SelectContent></Select></Field></div><div className="grid grid-cols-2 gap-4"><Field label="Valor"><Input inputMode="decimal" value={values.amount} onChange={(e) => setValues({ ...values, amount: e.target.value })} placeholder="0,00" /></Field><Field label="Data"><Input type="date" value={values.date} onChange={(e) => setValues({ ...values, date: e.target.value })} /></Field></div></div><DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button><Button disabled={saving || !categories.length} className="bg-[#6657d9] hover:bg-[#5849c8]" type="submit"><Check /> {saving ? "Salvando..." : item ? "Salvar alterações" : "Salvar gasto"}</Button></DialogFooter></form></DialogContent></Dialog>; }
 
-function SubcategoryDialog({ open, kind, existing, onOpenChange, onSave }: { open: boolean; kind: CategoryKind; existing: string[]; onOpenChange: (open: boolean) => void; onSave: (name: string) => void }) { const [name, setName] = useState(""); const label = kind === "fixed" ? "fixa" : "variável"; function submit(event: FormEvent) { event.preventDefault(); const normalized = name.trim(); if (!normalized) return toast.error("Informe o nome da subcategoria"); if (existing.some((item) => item.toLocaleLowerCase("pt-BR") === normalized.toLocaleLowerCase("pt-BR"))) return toast.error("Esta subcategoria já existe"); onSave(normalized); setName(""); } return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><form onSubmit={submit}><DialogHeader><DialogTitle>Nova subcategoria {label}</DialogTitle><DialogDescription>Ela ficará disponível ao registrar gastos {kind === "fixed" ? "fixos" : "variáveis"}.</DialogDescription></DialogHeader><div className="py-5"><Field label="Nome da subcategoria"><Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Ex.: Saúde" /></Field></div><DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button><Button className="bg-[#6657d9] hover:bg-[#5849c8]" type="submit"><Check /> Adicionar</Button></DialogFooter></form></DialogContent></Dialog>; }
+function SubcategoryDialog({ open, kind, existing, onOpenChange, onSave }: { open: boolean; kind: CategoryKind; existing: string[]; onOpenChange: (open: boolean) => void; onSave: (name: string) => Promise<boolean> }) { const [name, setName] = useState(""); const [saving, setSaving] = useState(false); const label = kind === "fixed" ? "fixa" : "variável"; async function submit(event: FormEvent) { event.preventDefault(); const normalized = name.trim(); if (!normalized) return toast.error("Informe o nome da subcategoria"); if (existing.some((item) => item.toLocaleLowerCase("pt-BR") === normalized.toLocaleLowerCase("pt-BR"))) return toast.error("Esta subcategoria já existe"); setSaving(true); if (await onSave(normalized)) setName(""); setSaving(false); } return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><form onSubmit={submit}><DialogHeader><DialogTitle>Nova subcategoria {label}</DialogTitle><DialogDescription>Ela ficará disponível ao registrar gastos {kind === "fixed" ? "fixos" : "variáveis"}.</DialogDescription></DialogHeader><div className="py-5"><Field label="Nome da subcategoria"><Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Ex.: Saúde" /></Field></div><DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button><Button disabled={saving} className="bg-[#6657d9] hover:bg-[#5849c8]" type="submit"><Check /> {saving ? "Salvando..." : "Adicionar"}</Button></DialogFooter></form></DialogContent></Dialog>; }
 
-function PersonDialog({ open, existing, onOpenChange, onSave }: { open: boolean; existing: string[]; onOpenChange: (open: boolean) => void; onSave: (name: string) => void }) { const [name, setName] = useState(""); function submit(event: FormEvent) { event.preventDefault(); const normalized = name.trim(); if (!normalized) return toast.error("Informe o nome da pessoa"); if (existing.some((item) => item.toLocaleLowerCase("pt-BR") === normalized.toLocaleLowerCase("pt-BR"))) return toast.error("Esta pessoa já existe"); onSave(normalized); setName(""); } return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><form onSubmit={submit}><DialogHeader><DialogTitle>Nova pessoa</DialogTitle><DialogDescription>Ela ficará disponível para seleção nas novas entradas.</DialogDescription></DialogHeader><div className="py-5"><Field label="Nome"><Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Ex.: Ana" /></Field></div><DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button><Button className="bg-[#6657d9] hover:bg-[#5849c8]" type="submit"><Check /> Adicionar</Button></DialogFooter></form></DialogContent></Dialog>; }
+function PersonDialog({ open, existing, onOpenChange, onSave }: { open: boolean; existing: string[]; onOpenChange: (open: boolean) => void; onSave: (name: string) => Promise<boolean> }) { const [name, setName] = useState(""); const [saving, setSaving] = useState(false); async function submit(event: FormEvent) { event.preventDefault(); const normalized = name.trim(); if (!normalized) return toast.error("Informe o nome da pessoa"); if (existing.some((item) => item.toLocaleLowerCase("pt-BR") === normalized.toLocaleLowerCase("pt-BR"))) return toast.error("Esta pessoa já existe"); setSaving(true); if (await onSave(normalized)) setName(""); setSaving(false); } return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><form onSubmit={submit}><DialogHeader><DialogTitle>Nova pessoa</DialogTitle><DialogDescription>Ela ficará disponível para seleção nas novas entradas.</DialogDescription></DialogHeader><div className="py-5"><Field label="Nome"><Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Ex.: Ana" /></Field></div><DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button><Button disabled={saving} className="bg-[#6657d9] hover:bg-[#5849c8]" type="submit"><Check /> {saving ? "Salvando..." : "Adicionar"}</Button></DialogFooter></form></DialogContent></Dialog>; }
 
-function GoalDialog({ open, goal, onOpenChange, onSave }: { open: boolean; goal: number; onOpenChange: (open: boolean) => void; onSave: (goal: number) => void }) { const [value, setValue] = useState(String(goal)); function submit(event: FormEvent) { event.preventDefault(); const next = Number(value.replace(",", ".")); if (next <= 0) return toast.error("A meta precisa ser maior que zero"); onSave(next); } return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><form onSubmit={submit}><DialogHeader><DialogTitle>Meta mensal</DialogTitle><DialogDescription>Defina quanto você pretende receber neste mês.</DialogDescription></DialogHeader><div className="py-5"><Field label="Valor da meta"><div className="relative"><Target className="absolute left-3 top-2.5 size-4 text-[#8a8da0]" /><Input className="pl-9" inputMode="decimal" value={value} onChange={(e) => setValue(e.target.value)} /></div></Field></div><DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button><Button className="bg-[#6657d9] hover:bg-[#5849c8]" type="submit">Salvar meta</Button></DialogFooter></form></DialogContent></Dialog>; }
+function GoalDialog({ open, goal, onOpenChange, onSave }: { open: boolean; goal: number; onOpenChange: (open: boolean) => void; onSave: (goal: number) => Promise<boolean> }) { const [value, setValue] = useState(goal > 0 ? String(goal) : ""); const [saving, setSaving] = useState(false); async function submit(event: FormEvent) { event.preventDefault(); const next = Number(value.replace(",", ".")); if (next <= 0) return toast.error("A meta precisa ser maior que zero"); setSaving(true); await onSave(next); setSaving(false); } return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><form onSubmit={submit}><DialogHeader><DialogTitle>Meta mensal</DialogTitle><DialogDescription>Defina quanto você pretende receber neste mês.</DialogDescription></DialogHeader><div className="py-5"><Field label="Valor da meta"><div className="relative"><Target className="absolute left-3 top-2.5 size-4 text-[#8a8da0]" /><Input className="pl-9" inputMode="decimal" value={value} onChange={(e) => setValue(e.target.value)} /></div></Field></div><DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button><Button disabled={saving} className="bg-[#6657d9] hover:bg-[#5849c8]" type="submit">{saving ? "Salvando..." : "Salvar meta"}</Button></DialogFooter></form></DialogContent></Dialog>; }
 
 function formatDate(value: string) { return shortDate.format(new Date(`${value}T12:00:00`)).replace(".", ""); }
 function compareTransactions(a: Income | Expense, b: Income | Expense) { const byDate = b.date.localeCompare(a.date); if (byDate) return byDate; return (b.createdAt ?? "").localeCompare(a.createdAt ?? ""); }
