@@ -22,6 +22,20 @@
       "when": 1790897520472,
       "tag": "0002_large_wind_dancer",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790982291035,
+      "tag": "0003_productive_viper",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790984414594,
+      "tag": "0004_shocking_thunderbolt_ross",
+      "breakpoints": true
     }
   ]
 }

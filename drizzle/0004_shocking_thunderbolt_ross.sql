@@ -1,0 +1,1 @@
+ALTER TABLE "monthly_goals" ADD COLUMN "name" text DEFAULT 'Meta mensal de entradas' NOT NULL;
