@@ -4,11 +4,12 @@ import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import {
   ArrowDownLeft, ArrowUpRight, Check, CircleDollarSign, LayoutDashboard,
   CalendarRange, ChevronLeft, ChevronRight, Database, Menu, Moon, Pencil, Plus, ReceiptText, Repeat2, Settings2, Sun, Tags, Target,
-  Trash2, UserRound, UsersRound, WalletCards, X,
+  Trash2, Undo2, UserRound, UsersRound, WalletCards, X,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,7 +23,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 type View = "dashboard" | "incomes" | "expenses" | "categories" | "people";
 type CategoryKind = "fixed" | "variable";
 type Income = { id: string; description: string; person: string; amount: number; date: string; createdAt?: string };
-type Expense = { id: string; description: string; categoryId: string; subcategory: string | null; amount: number; date: string; createdAt?: string; recurringExpenseId?: string | null; recurringUntil?: string | null; recurringActive?: boolean | null; recurring?: boolean };
+type Expense = { id: string; description: string; categoryId: string; subcategory: string | null; amount: number; date: string; paid: boolean; createdAt?: string; recurringExpenseId?: string | null; recurringUntil?: string | null; recurringActive?: boolean | null; recurring?: boolean };
 type Category = { id: string; name: string; kind: CategoryKind; color: string; subcategories: string[] };
 
 const money = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
@@ -103,7 +104,7 @@ export default function FinanceApp() {
     const draft = { ...payload, id: crypto.randomUUID(), createdAt: new Date().toISOString() };
     const result = await persist({ type: "expense", ...draft });
     if (!result) return false;
-    const item = { ...draft, recurringExpenseId: typeof result.recurringExpenseId === "string" ? result.recurringExpenseId : null, recurringUntil: payload.recurring ? payload.recurringUntil : null, recurringActive: Boolean(payload.recurring) };
+    const item = { ...draft, paid: false, recurringExpenseId: typeof result.recurringExpenseId === "string" ? result.recurringExpenseId : null, recurringUntil: payload.recurring ? payload.recurringUntil : null, recurringActive: Boolean(payload.recurring) };
     if (payload.recurring) await refreshFinanceData();
     else setExpenses((current) => [item, ...current]);
     toast.success("Gasto adicionado");
@@ -128,6 +129,14 @@ export default function FinanceApp() {
     toast.success("Gasto atualizado");
     return true;
   }
+  async function setExpensePaid(id: string, paid: boolean) {
+    const result = await persist({ type: "expensePaid", id, paid });
+    if (!result) return false;
+    setExpenses((current) => current.map((item) => item.id === id ? { ...item, paid } : item));
+    toast.success(paid ? "Conta marcada como paga" : "Pagamento desfeito");
+    return true;
+  }
+
   async function removeTransaction(type: "income" | "expense", id: string) {
     const expense = type === "expense" ? expenses.find((item) => item.id === id) : null;
     const recurrenceId = expense?.recurringActive ? expense.recurringExpenseId : null;
@@ -194,7 +203,7 @@ export default function FinanceApp() {
 
         <div className="mx-auto max-w-[1280px]">
           {(databaseLoading || databaseError) && <div className={`mb-5 flex items-start gap-3 rounded-2xl border p-4 text-sm ${databaseError ? "border-[#f2c8cf] bg-[#fff5f6] text-[#9f3043]" : "border-[#dedbea] bg-white text-[#676a7c]"}`}><Database className="mt-0.5 size-5 shrink-0" /><div><p className="font-semibold">{databaseError ? "PostgreSQL indisponível" : "Carregando dados do PostgreSQL"}</p><p className="mt-1">{databaseError ?? "Aguarde enquanto os dados são carregados."}</p></div></div>}
-          {view === "dashboard" && <Dashboard goal={goal} goalName={goalName} incomes={incomes} expenses={expenses} categories={categories} onEditGoalName={() => setDialog("goalName")} />}
+          {view === "dashboard" && <Dashboard goal={goal} goalName={goalName} incomes={incomes} expenses={expenses} categories={categories} onEditGoalName={() => setDialog("goalName")} onSetExpensePaid={setExpensePaid} />}
           {view === "incomes" && <ListView type="income" title="Todas as entradas" description="Acompanhe quem depositou e quando o valor entrou." items={incomes} people={people} onAdd={() => { setEditing(null); setDialog("income"); }} onEdit={(item) => { setEditing({ type: "income", item: item as Income }); setDialog("income"); }} onRemove={(id) => removeTransaction("income", id)} />}
           {view === "expenses" && <ListView type="expense" title="Todos os gastos" description="Consulte os gastos por categoria e subcategoria." items={expenses} categories={categories} onAdd={() => { setEditing(null); setDialog("expense"); }} onEdit={(item) => { setEditing({ type: "expense", item: item as Expense }); setDialog("expense"); }} onRemove={(id) => removeTransaction("expense", id)} />}
           {view === "categories" && <CategoriesView categories={categories} expenses={expenses} onAddSubcategory={(kind) => { setSubcategoryKind(kind); setDialog("subcategory"); }} onRemoveSubcategory={async (categoryId, name) => { if (!await persist({ type: "subcategoryDeactivate", categoryId, name })) return; setCategories((current) => current.map((category) => category.id === categoryId ? { ...category, subcategories: category.subcategories.filter((item) => item !== name) } : category)); toast.success("Subcategoria removida"); }} />}
@@ -215,7 +224,7 @@ export default function FinanceApp() {
 
 type ChartItem = { name: string; value: number; color: string };
 type DashboardPeriod = "month" | "last7" | "custom";
-function Dashboard({ goal, goalName, incomes, expenses, categories, onEditGoalName }: { goal: number; goalName: string; incomes: Income[]; expenses: Expense[]; categories: Category[]; onEditGoalName: () => void }) {
+function Dashboard({ goal, goalName, incomes, expenses, categories, onEditGoalName, onSetExpensePaid }: { goal: number; goalName: string; incomes: Income[]; expenses: Expense[]; categories: Category[]; onEditGoalName: () => void; onSetExpensePaid: (id: string, paid: boolean) => Promise<boolean> }) {
   const currentMonth = todayIso.slice(0, 7);
   const [period, setPeriod] = useState<DashboardPeriod>("month");
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
@@ -235,7 +244,10 @@ function Dashboard({ goal, goalName, incomes, expenses, categories, onEditGoalNa
   })).filter((item) => item.value > 0), [categories, periodExpenses]);
   const fixedSubcategoryChart = useMemo(() => subcategoryChart(periodExpenses, categories, "fixed", ["#6d5dfb", "#ff8a3d", "#22c55e", "#ef476f", "#118ab2", "#ffd166"]), [categories, periodExpenses]);
   const variableSubcategoryChart = useMemo(() => subcategoryChart(periodExpenses, categories, "variable", ["#00a6a6", "#f94144", "#f9c74f", "#577590", "#9b5de5", "#f3722c"]), [categories, periodExpenses]);
-  const transactions = [...periodIncomes.map((item) => ({ ...item, type: "income" as const })), ...periodExpenses.map((item) => ({ ...item, type: "expense" as const }))].sort(compareTransactions);
+  const pendingExpenses = useMemo(() => periodExpenses.filter((item) => !item.paid).sort((a, b) => a.date.localeCompare(b.date) || a.description.localeCompare(b.description)), [periodExpenses]);
+  const paidExpenses = useMemo(() => periodExpenses.filter((item) => item.paid).sort((a, b) => b.date.localeCompare(a.date) || b.description.localeCompare(a.description)), [periodExpenses]);
+  const paidTotal = paidExpenses.reduce((sum, item) => sum + item.amount, 0);
+  const remainingTotal = totalExpense - paidTotal;
 
   return <div className="space-y-5">
     <section className="rounded-2xl border border-[#e8e9f1] bg-white p-4 sm:p-5">
@@ -250,10 +262,76 @@ function Dashboard({ goal, goalName, incomes, expenses, categories, onEditGoalNa
     </section>
     <section className="grid gap-4 md:grid-cols-3"><SummaryCard title="Entradas" value={money.format(totalIncome)} hint={goal > 0 ? `${Math.round(goalProgress)}% da meta mensal` : periodLabel} icon={<ArrowDownLeft className="size-5" />} tone="green" /><SummaryCard title="Gastos" value={money.format(totalExpense)} hint={`${totalIncome ? Math.round(totalExpense / totalIncome * 100) : 0}% das entradas no período`} icon={<ArrowUpRight className="size-5" />} tone="red" /><SummaryCard title="Caixa" value={money.format(cashBalance)} hint={`Acumulado até ${formatDateLong(bounds.to)}`} icon={<WalletCards className="size-5" />} tone="purple" /></section>
     <section className="rounded-2xl border border-[#e8e9f1] bg-white p-5 sm:p-6"><div className="mb-4 flex items-center justify-between gap-4"><div><div className="flex items-center gap-2"><p className="text-sm font-semibold">{goalName}</p><button aria-label="Renomear meta" onClick={onEditGoalName} className="text-[#8e91a2] hover:text-[#6657d9]"><Pencil className="size-3.5" /></button></div><p className="mt-1 text-sm text-[#85889a]">{goal <= 0 ? "Defina uma meta para acompanhar seu progresso." : totalIncome >= goal ? "Meta alcançada. Ótimo trabalho!" : `Faltam ${money.format(goal - totalIncome)} para alcançar sua meta`}</p></div><p className="text-right text-sm text-[#85889a]"><strong className="block text-base text-[#252735]">{money.format(totalIncome)}</strong>{goal > 0 ? <>de {money.format(goal)}</> : "Meta não definida"}</p></div><Progress value={goalProgress} className="h-3 bg-[#eeecfb] [&_[data-slot=progress-indicator]]:bg-[#6657d9]" /></section>
-    <section className="grid gap-5 xl:grid-cols-[1.1fr_.9fr]">
-      <div className="rounded-2xl border border-[#e8e9f1] bg-white p-5 sm:p-6"><div className="mb-4"><h2 className="font-semibold">Distribuição dos gastos</h2><p className="mt-1 text-sm text-[#85889a]">Categorias e suas subcategorias</p></div><Tabs defaultValue="group"><TabsList className="grid w-full grid-cols-3"><TabsTrigger value="group">Total</TabsTrigger><TabsTrigger value="fixed">Fixas</TabsTrigger><TabsTrigger value="variable">Variáveis</TabsTrigger></TabsList><TabsContent value="group"><ChartBlock data={groupChart} total={totalExpense} /></TabsContent><TabsContent value="fixed"><ChartBlock data={fixedSubcategoryChart} total={fixedSubcategoryChart.reduce((sum, item) => sum + item.value, 0)} empty="Ainda não há gastos fixos." /></TabsContent><TabsContent value="variable"><ChartBlock data={variableSubcategoryChart} total={variableSubcategoryChart.reduce((sum, item) => sum + item.value, 0)} empty="Ainda não há gastos variáveis." /></TabsContent></Tabs></div>
-      <div className="rounded-2xl border border-[#e8e9f1] bg-white p-5 sm:p-6"><div className="mb-5 flex items-start justify-between"><div><h2 className="font-semibold">Movimentações do período</h2><p className="mt-1 text-sm text-[#85889a]">{transactions.length} {transactions.length === 1 ? "movimentação" : "movimentações"} • mais recentes primeiro</p></div><ReceiptText className="size-5 text-[#9b9eae]" /></div><div className="max-h-[420px] space-y-1 overflow-y-auto pr-1">{transactions.map((item) => { const isIncome = item.type === "income"; const category = !isIncome ? categories.find((cat) => cat.id === item.categoryId) : null; const expenseLabel = item.subcategory ? `${category?.name} • ${item.subcategory}` : category?.name; return <div key={`${item.type}-${item.id}`} className="flex items-center gap-3 border-b border-[#f0f0f4] py-3 last:border-0"><span className={`grid size-10 place-items-center rounded-xl ${isIncome ? "bg-[#eaf8f1] text-[#16845b]" : "bg-[#fff0f2] text-[#d24d64]"}`}>{isIncome ? <ArrowDownLeft className="size-[18px]" /> : <ArrowUpRight className="size-[18px]" />}</span><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{item.description}</p><p className="truncate text-xs text-[#9194a5]">{isIncome ? `Entrada por ${item.person}` : expenseLabel} • {formatDate(item.date)}</p></div><p className={`text-sm font-semibold ${isIncome ? "text-[#16845b]" : "text-[#d24d64]"}`}>{isIncome ? "+ " : "- "}{money.format(item.amount)}</p></div>; })}{!transactions.length && <p className="py-12 text-center text-sm text-[#85889a]">Nenhuma movimentação neste período.</p>}</div></div>
+    <section className="grid items-stretch gap-5 xl:grid-cols-[1.1fr_.9fr]">
+      <div className="h-[430px] overflow-hidden rounded-2xl border border-[#e8e9f1] bg-white p-5 sm:h-[450px] sm:p-6 xl:h-[580px]"><div className="mb-4"><h2 className="font-semibold">Distribuição dos gastos</h2><p className="mt-1 text-sm text-[#85889a]">Categorias e suas subcategorias</p></div><Tabs defaultValue="group"><TabsList className="grid w-full grid-cols-3"><TabsTrigger value="group">Total</TabsTrigger><TabsTrigger value="fixed">Fixas</TabsTrigger><TabsTrigger value="variable">Variáveis</TabsTrigger></TabsList><TabsContent value="group"><ChartBlock data={groupChart} total={totalExpense} /></TabsContent><TabsContent value="fixed"><ChartBlock data={fixedSubcategoryChart} total={fixedSubcategoryChart.reduce((sum, item) => sum + item.value, 0)} empty="Ainda não há gastos fixos." /></TabsContent><TabsContent value="variable"><ChartBlock data={variableSubcategoryChart} total={variableSubcategoryChart.reduce((sum, item) => sum + item.value, 0)} empty="Ainda não há gastos variáveis." /></TabsContent></Tabs></div>
+      <BillsPanel
+        pendingExpenses={pendingExpenses}
+        paidExpenses={paidExpenses}
+        categories={categories}
+        expenseTotal={totalExpense}
+        paidTotal={paidTotal}
+        remainingTotal={remainingTotal}
+        onSetExpensePaid={onSetExpensePaid}
+      />
     </section>
+  </div>;
+}
+
+function BillsPanel({ pendingExpenses, paidExpenses, categories, expenseTotal, paidTotal, remainingTotal, onSetExpensePaid }: {
+  pendingExpenses: Expense[];
+  paidExpenses: Expense[];
+  categories: Category[];
+  expenseTotal: number;
+  paidTotal: number;
+  remainingTotal: number;
+  onSetExpensePaid: (id: string, paid: boolean) => Promise<boolean>;
+}) {
+  const expenseMeta = (item: Expense) => {
+    const category = categories.find((entry) => entry.id === item.categoryId);
+    return item.subcategory ? `${category?.name ?? "Categoria"} • ${item.subcategory}` : category?.name ?? "Sem categoria";
+  };
+
+  return <div className="flex h-[760px] flex-col overflow-hidden rounded-2xl border border-[#e8e9f1] bg-white p-5 sm:h-[680px] sm:p-6 xl:h-[580px]">
+    <div className="mb-4 flex items-start justify-between">
+      <div><h2 className="font-semibold">Contas do período</h2><p className="mt-1 text-sm text-[#85889a]">Acompanhe os pagamentos e desfaça uma baixa quando precisar.</p></div>
+      <ReceiptText className="size-5 text-[#9b9eae]" />
+    </div>
+    <div className="mb-5 rounded-xl bg-[#fafafd] p-4">
+      <div className="flex items-end justify-between gap-4">
+        <div><p className="text-xs font-medium text-[#85889a]">Total de gastos do período</p><p className="mt-1 text-lg font-bold text-[#252735]">{money.format(expenseTotal)}</p></div>
+        <div className="text-right"><p className="text-xs font-medium text-[#85889a]">Restante a pagar</p><p className={`mt-1 text-lg font-bold ${remainingTotal > 0 ? "text-[#d24d64]" : "text-[#16845b]"}`}>{money.format(remainingTotal)}</p></div>
+      </div>
+      <p className="mt-2 text-xs text-[#9295a6]">Já pago: {money.format(paidTotal)}</p>
+    </div>
+    <div className="grid min-h-0 flex-1 grid-rows-2 gap-5 lg:grid-cols-2 lg:grid-rows-1 lg:gap-0">
+      <section className="flex min-h-0 min-w-0 flex-col lg:pr-5">
+        <div className="mb-2 flex items-center justify-between gap-3"><h3 className="text-sm font-semibold">Para pagar</h3><span className="rounded-full bg-[#fff0f2] px-2 py-0.5 text-xs font-semibold text-[#d24d64]">{pendingExpenses.length}</span></div>
+        <p className="mb-2 text-xs text-[#9295a6]">Do vencimento mais próximo ao mais distante</p>
+        <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
+          {pendingExpenses.map((item) => {
+            const overdue = item.date < todayIso;
+            return <div key={item.id} className="flex items-center gap-3 border-b border-[#f0f0f4] py-3 last:border-0">
+              <Checkbox checked={false} aria-label={`Marcar ${item.description} como paga`} onCheckedChange={async (checked) => { if (checked === true) await onSetExpensePaid(item.id, true); }} />
+              <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{item.description}</p><p className="truncate text-xs text-[#9194a5]">{expenseMeta(item)} • {overdue ? `Venceu ${formatDate(item.date)}` : `Vence ${formatDate(item.date)}`}</p></div>
+              <p className="text-sm font-semibold text-[#d24d64]">{money.format(item.amount)}</p>
+            </div>;
+          })}
+          {!pendingExpenses.length && <div className="py-8 text-center"><p className="text-sm font-semibold text-[#16845b]">Tudo pago!</p><p className="mt-1 text-xs text-[#85889a]">Não há contas pendentes neste período.</p></div>}
+        </div>
+      </section>
+      <section className="flex min-h-0 min-w-0 flex-col border-t border-[#ececf2] pt-5 lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
+        <div className="mb-2 flex items-center justify-between gap-3"><h3 className="text-sm font-semibold">Pagas recentemente</h3><span className="rounded-full bg-[#eaf8f1] px-2 py-0.5 text-xs font-semibold text-[#16845b]">{paidExpenses.length}</span></div>
+        <p className="mb-2 text-xs text-[#9295a6]">Pagamentos do período, dos mais recentes aos mais antigos</p>
+        <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
+          {paidExpenses.map((item) => <div key={item.id} className="flex items-center gap-3 border-b border-[#f0f0f4] py-3 last:border-0">
+            <span className="grid size-5 shrink-0 place-items-center rounded-full bg-[#eaf8f1] text-[#16845b]"><Check className="size-3.5" /></span>
+            <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{item.description}</p><p className="truncate text-xs text-[#9194a5]">{expenseMeta(item)} • {formatDate(item.date)}</p></div>
+            <div className="flex shrink-0 flex-col items-end gap-1"><p className="text-sm font-semibold text-[#16845b]">{money.format(item.amount)}</p><Button variant="ghost" size="xs" className="text-[#696c7e]" onClick={() => void onSetExpensePaid(item.id, false)}><Undo2 />Desfazer</Button></div>
+          </div>)}
+          {!paidExpenses.length && <div className="py-8 text-center"><p className="text-sm font-semibold text-[#696c7e]">Nenhuma conta paga</p><p className="mt-1 text-xs text-[#85889a]">Os pagamentos aparecerão aqui.</p></div>}
+        </div>
+      </section>
+    </div>
   </div>;
 }
 
@@ -266,7 +344,7 @@ function ChartBlock({ data, total, empty = "Nenhum gasto registrado." }: { data:
   return <div className="grid items-center gap-3 pt-4 sm:grid-cols-[1fr_195px]"><div className="grid h-[245px] place-items-center"><div className="relative grid size-[194px] place-items-center rounded-full" style={{ background: `conic-gradient(${stops})` }} role="img" aria-label={`Gráfico de pizza com total de ${money.format(total)}`}><div className="grid size-[132px] place-items-center rounded-full bg-white text-center shadow-[inset_0_0_0_1px_rgba(0,0,0,.02)]"><div><p className="text-xs text-[#8a8da0]">Total</p><p className="mt-1 whitespace-nowrap text-base font-bold">{money.format(total)}</p></div></div></div></div><div className="space-y-3">{data.map((item) => <div key={item.name} className="flex items-center gap-3"><span className="size-2.5 rounded-full" style={{ backgroundColor: item.color }} /><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{item.name}</p><p className="text-xs text-[#9194a5]">{total ? Math.round(item.value / total * 100) : 0}%</p></div><p className="text-sm font-semibold">{money.format(item.value)}</p></div>)}</div></div>;
 }
 
-function SummaryCard({ title, value, hint, icon, tone }: { title: string; value: string; hint: string; icon: ReactNode; tone: "green" | "red" | "purple" }) { const styles = { green: "bg-[#eaf8f1] text-[#16845b]", red: "bg-[#fff0f2] text-[#d24d64]", purple: "bg-[#efedfc] text-[#6657d9]" }; return <article className="rounded-2xl border border-[#e8e9f1] bg-white p-5 sm:p-6"><div className="mb-5 flex items-center justify-between"><p className="text-sm font-medium text-[#747789]">{title}</p><span className={`grid size-10 place-items-center rounded-xl ${styles[tone]}`}>{icon}</span></div><p className="text-2xl font-bold tracking-[-0.035em]">{value}</p><p className="mt-1.5 text-xs text-[#9295a6]">{hint}</p></article>; }
+function SummaryCard({ title, value, hint, icon, tone }: { title: string; value: string; hint: string; icon: ReactNode; tone: "green" | "red" | "purple" }) { const styles = { green: "bg-[#eaf8f1] text-[#16845b]", red: "bg-[#fff0f2] text-[#d24d64]", purple: "bg-[#efedfc] text-[#6657d9]" }; return <article className="rounded-2xl border border-[#e8e9f1] bg-white p-5 sm:p-6"><div className="mb-5 flex items-center justify-between"><p className="text-sm font-medium text-[#747789]">{title}</p><span className={`grid size-10 place-items-center rounded-xl ${styles[tone]}`}>{icon}</span></div><p className={`text-2xl font-bold tracking-[-0.035em] ${title === "Caixa" ? (value.startsWith("-") ? "text-[#d24d64]" : "text-[#16845b]") : ""}`}>{value}</p><p className="mt-1.5 text-xs text-[#9295a6]">{hint}</p></article>; }
 
 function ListView({ type, title, description, items, categories = [], people = [], onAdd, onEdit, onRemove }: { type: "income" | "expense"; title: string; description: string; items: Income[] | Expense[]; categories?: Category[]; people?: string[]; onAdd: () => void; onEdit: (item: Income | Expense) => void; onRemove: (id: string) => void }) {
   const isIncome = type === "income";
@@ -283,6 +361,7 @@ function ListView({ type, title, description, items, categories = [], people = [
     return true;
   }).sort(compareTransactions);
   const hasFilters = Object.values(filters).some((value) => value !== "" && value !== "all");
+  const filteredTotal = filtered.reduce((sum, item) => sum + item.amount, 0);
   return <section className="overflow-hidden rounded-2xl border border-[#e8e9f1] bg-white">
     <div className="flex items-center justify-between border-b border-[#eeeeF3] p-5 sm:p-6"><div><h2 className="font-semibold">{title}</h2><p className="mt-1 text-sm text-[#85889a]">{description}</p></div><Button onClick={onAdd} className="rounded-xl bg-[#6657d9] hover:bg-[#5849c8]"><Plus /> Adicionar</Button></div>
     <div className="grid gap-3 border-b border-[#eeeeF3] bg-[#fafafd] p-4 sm:grid-cols-2 lg:grid-cols-5 sm:p-5">
@@ -307,6 +386,7 @@ function ListView({ type, title, description, items, categories = [], people = [
       </table>
     </div>
     {!filtered.length && <p className="border-t border-[#f0f0f4] p-8 text-center text-sm text-[#85889a]">Nenhuma movimentação encontrada com estes filtros.</p>}
+    {<div className="flex items-center justify-between gap-4 border-t border-[#eeeeF3] bg-[#fafafd] px-5 py-4 sm:px-6"><div><p className="text-sm font-medium text-[#747789]">Resultado dos filtros</p><p className="mt-0.5 text-xs text-[#9295a6]">{filtered.length} {filtered.length === 1 ? (isIncome ? "entrada encontrada" : "gasto encontrado") : (isIncome ? "entradas encontradas" : "gastos encontrados")}</p></div><p className={`text-xl font-bold ${isIncome ? "text-[#16845b]" : "text-[#d24d64]"}`}>{money.format(filteredTotal)}</p></div>}
   </section>;
 }
 

@@ -41,6 +41,7 @@ server.listen(port, "127.0.0.1", async () => {
 });
 
 async function loadFinanceData() {
+  await ensureExpensePaidColumn();
   await ensureBaseCategories();
   await generateRecurringExpenses();
   const { start, end } = currentMonthBounds();
@@ -49,7 +50,7 @@ async function loadFinanceData() {
     pool.query("select id, category_id as \"categoryId\", name, active from subcategories order by name"),
     pool.query("select name from people where active = true order by name"),
     pool.query("select i.id, i.description, i.amount::float8 as amount, i.date::text, i.created_at as \"createdAt\", p.name as person from incomes i join people p on p.id = i.person_id order by i.date desc, i.created_at desc"),
-    pool.query("select e.id, e.description, e.amount::float8 as amount, e.date::text, e.created_at as \"createdAt\", e.category_id as \"categoryId\", e.recurring_expense_id as \"recurringExpenseId\", s.name as subcategory, r.end_date::text as \"recurringUntil\", r.active as \"recurringActive\" from expenses e left join subcategories s on s.id = e.subcategory_id left join recurring_expenses r on r.id = e.recurring_expense_id order by e.date desc, e.created_at desc"),
+    pool.query("select e.id, e.description, e.amount::float8 as amount, e.date::text, e.created_at as \"createdAt\", e.category_id as \"categoryId\", e.paid, e.recurring_expense_id as \"recurringExpenseId\", s.name as subcategory, r.end_date::text as \"recurringUntil\", r.active as \"recurringActive\" from expenses e left join subcategories s on s.id = e.subcategory_id left join recurring_expenses r on r.id = e.recurring_expense_id order by e.date desc, e.created_at desc"),
     pool.query("select name, amount::float8 as amount from monthly_goals where month >= $1 and month < $2 limit 1", [start, end]),
   ]);
   return {
@@ -64,6 +65,7 @@ async function loadFinanceData() {
 }
 
 async function mutateFinanceData(body) {
+  await ensureExpensePaidColumn();
   const type = String(body.type || "");
   if (type === "income" || type === "incomeUpdate") {
     const person = await pool.query("insert into people (name, active) values ($1, true) on conflict (name) do update set active = true returning id", [String(body.person || "").trim()]);
@@ -107,6 +109,11 @@ async function mutateFinanceData(body) {
     }
     return { status: type === "expense" ? "created" : "updated", recurringExpenseId: recurrenceId };
   }
+  if (type === "expensePaid") {
+    const result = await pool.query("update expenses set paid = $2 where id = $1 returning id, paid", [body.id, Boolean(body.paid)]);
+    if (!result.rows[0]) throw new Error("Conta não encontrada");
+    return { status: "updated", paid: result.rows[0].paid };
+  }
   if (type === "incomeDelete" || type === "expenseDelete") {
     if (type === "expenseDelete") {
       const expense = await pool.query("select e.recurring_expense_id as \"recurringExpenseId\", r.active as \"recurringActive\" from expenses e left join recurring_expenses r on r.id = e.recurring_expense_id where e.id = $1", [body.id]);
@@ -149,6 +156,10 @@ async function mutateFinanceData(body) {
     return { status: "saved" };
   }
   throw new Error("Operação inválida");
+}
+
+async function ensureExpensePaidColumn() {
+  await pool.query('alter table expenses add column if not exists paid boolean not null default false');
 }
 
 async function ensureBaseCategories() {

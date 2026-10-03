@@ -36,6 +36,13 @@
       "when": 1790984414594,
       "tag": "0004_shocking_thunderbolt_ross",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790990000000,
+      "tag": "0005_add_expense_paid",
+      "breakpoints": true
     }
   ]
 }

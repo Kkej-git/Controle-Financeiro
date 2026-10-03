@@ -1,4 +1,4 @@
-import { and, eq, gt, gte, lt } from "drizzle-orm";
+import { and, eq, gt, gte, lt, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { getDb } from "@/db";
 import { categories, expenses, incomes, monthlyGoals, people, recurringExpenses, subcategories } from "@/db/schema";
@@ -7,6 +7,7 @@ export async function GET() {
   if (!process.env.DATABASE_URL) return NextResponse.json({ configured: false, error: "A conexão com o PostgreSQL ainda não foi configurada." }, { status: 503 });
   try {
     const db = getDb();
+    await ensureExpensePaidColumn(db);
     let categoryRows = await db.select().from(categories);
     if (!categoryRows.length) {
       categoryRows = await db.insert(categories).values([
@@ -25,7 +26,7 @@ export async function GET() {
     const [subcategoryRows, peopleRows, incomeRows, expenseRows, goalRows] = await Promise.all([
       db.select().from(subcategories), db.select().from(people),
       db.select({ id: incomes.id, description: incomes.description, amount: incomes.amount, date: incomes.date, createdAt: incomes.createdAt, person: people.name }).from(incomes).innerJoin(people, eq(incomes.personId, people.id)),
-      db.select({ id: expenses.id, description: expenses.description, amount: expenses.amount, date: expenses.date, createdAt: expenses.createdAt, categoryId: expenses.categoryId, recurringExpenseId: expenses.recurringExpenseId, subcategory: subcategories.name, recurringUntil: recurringExpenses.endDate, recurringActive: recurringExpenses.active }).from(expenses).leftJoin(subcategories, eq(expenses.subcategoryId, subcategories.id)).leftJoin(recurringExpenses, eq(expenses.recurringExpenseId, recurringExpenses.id)),
+      db.select({ id: expenses.id, description: expenses.description, amount: expenses.amount, date: expenses.date, createdAt: expenses.createdAt, categoryId: expenses.categoryId, paid: expenses.paid, recurringExpenseId: expenses.recurringExpenseId, subcategory: subcategories.name, recurringUntil: recurringExpenses.endDate, recurringActive: recurringExpenses.active }).from(expenses).leftJoin(subcategories, eq(expenses.subcategoryId, subcategories.id)).leftJoin(recurringExpenses, eq(expenses.recurringExpenseId, recurringExpenses.id)),
       db.select().from(monthlyGoals).where(and(gte(monthlyGoals.month, start), lt(monthlyGoals.month, end))),
     ]);
     return NextResponse.json({ configured: true, categories: categoryRows.map((category) => ({ ...category, subcategories: subcategoryRows.filter((item) => item.categoryId === category.id && item.active).map((item) => item.name) })), people: peopleRows.filter((item) => item.active).map((item) => item.name), incomes: incomeRows.map((item) => ({ ...item, amount: Number(item.amount) })), expenses: expenseRows.map((item) => ({ ...item, amount: Number(item.amount) })), goal: goalRows[0] ? Number(goalRows[0].amount) : 0, goalName: goalRows[0]?.name ?? "Meta mensal de entradas" });
@@ -36,6 +37,7 @@ export async function POST(request: Request) {
   if (!process.env.DATABASE_URL) return NextResponse.json({ configured: false, error: "A conexão com o PostgreSQL ainda não foi configurada." }, { status: 503 });
   try {
     const db = getDb();
+    await ensureExpensePaidColumn(db);
     const body = await request.json() as Record<string, unknown>;
     if (body.type === "income") {
       const personName = String(body.person ?? "").trim();
@@ -57,7 +59,7 @@ export async function POST(request: Request) {
         const [recurrence] = await db.insert(recurringExpenses).values({ description: String(body.description), categoryId: category[0].id, subcategoryId: sub[0].id, amount: String(body.amount), startDate: String(body.date), endDate: String(body.recurringUntil) }).returning();
         recurringExpenseId = recurrence.id;
       }
-      const [created] = await db.insert(expenses).values({ id: String(body.id), description: String(body.description), categoryId: category[0].id, subcategoryId: sub[0].id, recurringExpenseId, amount: String(body.amount), date: String(body.date) }).returning();
+      const [created] = await db.insert(expenses).values({ id: String(body.id), description: String(body.description), categoryId: category[0].id, subcategoryId: sub[0].id, recurringExpenseId, amount: String(body.amount), date: String(body.date), paid: false }).returning();
       if (recurringExpenseId) await generateRecurringExpenses(db, recurringExpenseId);
       return NextResponse.json(created, { status: 201 });
     }
@@ -96,6 +98,10 @@ export async function POST(request: Request) {
       }
       await db.update(expenses).set({ description: String(body.description), categoryId: category[0].id, subcategoryId: sub[0].id, recurringExpenseId, amount: String(body.amount), date: String(body.date) }).where(eq(expenses.id, String(body.id)));
       return NextResponse.json({ status: "updated", recurringExpenseId });
+    }
+    if (body.type === "expensePaid") {
+      await db.update(expenses).set({ paid: Boolean(body.paid) }).where(eq(expenses.id, String(body.id)));
+      return NextResponse.json({ status: "updated", paid: Boolean(body.paid) });
     }
     if (body.type === "incomeDelete") {
       await db.delete(incomes).where(eq(incomes.id, String(body.id)));
@@ -150,6 +156,10 @@ export async function POST(request: Request) {
     }
     return NextResponse.json({ error: "Operação inválida" }, { status: 400 });
   } catch (error) { console.error("Falha ao salvar dado financeiro", error); return NextResponse.json({ error: "Não foi possível salvar no banco de dados." }, { status: 500 }); }
+}
+
+async function ensureExpensePaidColumn(db: ReturnType<typeof getDb>) {
+  await db.execute(sql`ALTER TABLE "expenses" ADD COLUMN IF NOT EXISTS "paid" boolean DEFAULT false NOT NULL`);
 }
 
 function currentMonthBounds() {
